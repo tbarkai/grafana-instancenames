@@ -81,6 +81,7 @@ export class CloudWatchDatasource extends DataSourceApi<CloudWatchQuery, CloudWa
   debouncedCustomAlert: (title: string, message: string) => void;
   logQueries: Record<string, { id: string; region: string; statsQuery: boolean }>;
   languageProvider: CloudWatchLanguageProvider;
+  private instanceNames: Map<string, string> = new Map();
 
   constructor(
     instanceSettings: DataSourceInstanceSettings<CloudWatchJsonData>,
@@ -105,6 +106,10 @@ export class CloudWatchDatasource extends DataSourceApi<CloudWatchQuery, CloudWa
 
     let queries = options.targets.filter(item => item.id !== '' || item.hide !== true);
     const { logQueries, metricsQueries } = this.getTargetsByQueryMode(queries);
+
+    if (this.instanceNames.size === 0) {
+      this.performInstanceNameQuery(this.instanceNames);
+    }
 
     const dataQueryResponses: Array<Observable<DataQueryResponse>> = [];
     if (logQueries.length > 0) {
@@ -496,6 +501,15 @@ export class CloudWatchDatasource extends DataSourceApi<CloudWatchQuery, CloudWa
     )}`;
   }
 
+  performInstanceNameQuery(instanceNames: Map<string, string>) {
+    this.metricFindQuery(`ec2_instance_attribute(${this.defaultRegion}, Tags.Name, {})`).then((res: any) => {
+      // text is instanceId and value is instanceName
+      res.forEach((x: { text: string; value: string }) => {
+        instanceNames.set(x.text, x.value);
+      });
+    });
+  }
+
   async performTimeSeriesQuery(request: MetricRequest, { from, to }: TimeRange): Promise<any> {
     try {
       const res: TSDBResponse = await this.awsRequest(TSDB_QUERY_ENDPOINT, request);
@@ -503,6 +517,8 @@ export class CloudWatchDatasource extends DataSourceApi<CloudWatchQuery, CloudWa
       if (!dataframes || dataframes.length <= 0) {
         return { data: [] };
       }
+
+      const instanceNames = this.instanceNames;
 
       return Object.values(request.queries).reduce(
         ({ data, error }: any, queryRequest: any) => {
@@ -524,6 +540,20 @@ export class CloudWatchDatasource extends DataSourceApi<CloudWatchQuery, CloudWa
             data: [
               ...data,
               ...dataframes.map(frame => {
+                if (instanceNames.size > 0) {
+                  for (const field of frame.fields) {
+                    const name = field.config.displayName;
+                    if (name) {
+                      // series names can be composite, but must contain InstanceId
+                      const ec2InstanceIds = name.split(' ').filter((x: string) => x.startsWith('i-'));
+                      if (ec2InstanceIds.length > 0) {
+                        // only replace the name if we found an EC2 instance ID pattern
+                        field.config.displayName = instanceNames.get(ec2InstanceIds[0]);
+                      }
+                    }
+                  }
+                }
+
                 if (link) {
                   for (const field of frame.fields) {
                     field.config.links = [

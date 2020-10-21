@@ -570,8 +570,12 @@ func (e *cloudWatchExecutor) handleGetEc2InstanceAttribute(ctx context.Context, 
 				continue
 			}
 
+			var text = data
+			if attributeName == "Tags.Name" {
+				text = *instance.InstanceId
+			}
 			dupCheck[data] = true
-			result = append(result, suggestData{Text: data, Value: data})
+			result = append(result, suggestData{Text: text, Value: data})
 		}
 	}
 
